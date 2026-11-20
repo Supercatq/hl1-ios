@@ -1,0 +1,64 @@
+name: Build Half-Life IPA
+
+# Builds the open-source Xash3D FWGS engine + Half-Life game code (hlsdk-portable)
+# for iPhone/iPad and uploads an unsigned .ipa. No Valve game files are used here:
+# add your own Steam "valve" folder afterwards with scripts/add-game-files.ps1.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+env:
+  # Pinned to commits whose upstream iOS CI passed, so builds are repeatable.
+  # Bump these to pick up newer engine / game-code fixes.
+  ENGINE_REF: 11ed246c885d710ca1682370c66ee6594ac2d25a # FWGS/xash3d-fwgs, 2026-11-17
+  HLSDK_REF: 7ec223cfd29e0c20d8e52927dcc3d0c27d9ca7ac  # FWGS/hlsdk-portable mobile_hacks, 2026-11-08
+  SDL_VERSION: 2.32.10
+
+jobs:
+  ios:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - name: Get engine source (Xash3D FWGS)
+        uses: actions/checkout@v6
+        with:
+          repository: FWGS/xash3d-fwgs
+          ref: ${{ env.ENGINE_REF }}
+          submodules: recursive
+
+      - name: Get this repo (joystick layout + patches)
+        uses: actions/checkout@v6
+        with:
+          path: hl1-ios
+
+      - name: Apply Half-Life customizations (joystick default, app name)
+        run: python3 hl1-ios/scripts/customize.py
+
+      - name: Build SDL2 for iOS
+        run: |
+          git submodule update --init --checkout 3rdparty/nanogl
+          git clone --depth 1 -b "release-$SDL_VERSION" https://github.com/libsdl-org/SDL SDL
+          cd SDL/Xcode/SDL
+          xcodebuild -scheme xcFramework-iOS -target xcFramework-iOS build -configuration Release
+          sudo cp -R Products/SDL2.xcframework/ios-arm64/SDL2.framework /Library/Frameworks
+
+      - name: Get Half-Life game code (hlsdk-portable)
+        run: |
+          git clone -b mobile_hacks https://github.com/FWGS/hlsdk-portable hlsdk
+          git -C hlsdk checkout "$HLSDK_REF"
+          git -C hlsdk submodule update --init --recursive
+
+      - name: Build engine + game code, package IPA
+        run: bash scripts/gha/build_ios.sh
+
+      - name: Name the IPA
+        run: mv artifacts/xash3d-fwgs-ios-arm64.ipa artifacts/HalfLife-engine.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v7
+        with:
+          name: HalfLife-engine-ipa
+          path: artifacts/HalfLife-engine.ipa
+          if-no-files-found: error
